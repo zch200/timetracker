@@ -1,6 +1,8 @@
-import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'path'
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url)
+const Database = require('better-sqlite3')
 import type { Database as SQLiteDatabase } from 'better-sqlite3'
 // @ts-ignore (raw import is handled by vite)
 import schema from './schema.sql?raw'

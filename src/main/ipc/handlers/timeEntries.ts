@@ -1,44 +1,58 @@
 import { ipcMain } from 'electron'
 import { getDatabase } from '../../database'
-import { calculateDuration } from '../../utils/time'
+import { TimeEntryWithDimensions, Gap } from '../../database/types'
 
 // 获取某日记录列表
 ipcMain.handle('timeEntries:getByDate', async (_event, date: string) => {
   try {
     const db = getDatabase()
 
+    // 1. 获取基础记录
     const entries = db
       .prepare(
         `
       SELECT
         te.id,
-        te.activity,
+        te.title,
         te.start_time,
         te.end_time,
-        te.duration_minutes,
-        te.date,
-        c.id AS category_id,
-        c.name AS category_name,
-        c.color AS category_color
+        te.duration_seconds,
+        te.description,
+        te.created_at,
+        te.updated_at
       FROM time_entries te
-      INNER JOIN categories c ON te.category_id = c.id
-      WHERE te.date = ?
+      WHERE DATE(te.start_time) = ?
       ORDER BY te.start_time DESC
     `
       )
-      .all(date) as Array<{
-      id: number
-      activity: string
-      start_time: string
-      end_time: string
-      duration_minutes: number
-      date: string
-      category_id: number
-      category_name: string
-      category_color: string
-    }>
+      .all(date) as any[]
 
-    return entries
+    // 2. 获取每个记录的维度属性
+    const result = entries.map((entry) => {
+      const dimensions = db
+        .prepare(
+          `
+        SELECT
+          d.id AS dimension_id,
+          d.name AS dimension_name,
+          do.id AS option_id,
+          do.name AS option_name,
+          do.color AS option_color
+        FROM entry_attributes ea
+        JOIN dimension_options do ON ea.option_id = do.id
+        JOIN dimensions d ON do.dimension_id = d.id
+        WHERE ea.entry_id = ?
+      `
+        )
+        .all(entry.id)
+
+      return {
+        ...entry,
+        dimensions,
+      }
+    })
+
+    return result
   } catch (error: any) {
     return {
       error: error.message || '获取记录列表失败',
@@ -47,146 +61,158 @@ ipcMain.handle('timeEntries:getByDate', async (_event, date: string) => {
   }
 })
 
-// 搜索历史事项（自动补全）
-ipcMain.handle('activities:search', async (_event, keyword: string) => {
+// 获取正在进行的记录
+ipcMain.handle('timeEntries:getCurrentActive', async () => {
   try {
     const db = getDatabase()
-
-    // 使用 LIKE 进行模糊匹配，按最近使用排序
-    const activities = db
+    const entry = db
       .prepare(
         `
-      SELECT DISTINCT activity
-      FROM time_entries
-      WHERE activity LIKE ? || '%'
-      GROUP BY activity
-      ORDER BY MAX(created_at) DESC
-      LIMIT 10
+      SELECT
+        te.id,
+        te.title,
+        te.start_time,
+        te.end_time,
+        te.duration_seconds,
+        te.description,
+        te.created_at,
+        te.updated_at
+      FROM time_entries te
+      WHERE te.end_time IS NULL
+      LIMIT 1
     `
       )
-      .all(keyword) as Array<{ activity: string }>
+      .get() as any
 
-    return activities.map((item) => item.activity)
+    if (!entry) return null
+
+    const dimensions = db
+      .prepare(
+        `
+      SELECT
+        d.id AS dimension_id,
+        d.name AS dimension_name,
+        do.id AS option_id,
+        do.name AS option_name,
+        do.color AS option_color
+      FROM entry_attributes ea
+      JOIN dimension_options do ON ea.option_id = do.id
+      JOIN dimensions d ON do.dimension_id = d.id
+      WHERE ea.entry_id = ?
+    `
+      )
+      .all(entry.id)
+
+    return {
+      ...entry,
+      dimensions,
+    }
   } catch (error: any) {
     return {
-      error: error.message || '搜索事项失败',
+      error: error.message || '获取当前活动失败',
       code: 'DB_ERROR',
     }
   }
 })
 
-// 检测时间冲突
+// 切换活动 (结束当前 + 开始新的)
 ipcMain.handle(
-  'timeEntries:checkConflict',
-  async (
-    _event,
-    params: {
-      date: string
-      startTime: string
-      endTime: string
-      excludeId?: number
-    }
-  ) => {
-    try {
-      const db = getDatabase()
-      const { date, startTime, endTime, excludeId } = params
+  'timeEntries:switch',
+  async (_event, params: { title: string; optionIds: number[]; description?: string }) => {
+    const db = getDatabase()
+    const { title, optionIds, description } = params
 
-      let query = `
-        SELECT id, activity, start_time, end_time
-        FROM time_entries
-        WHERE date = ?
-          AND (
-            (start_time < ? AND end_time > ?)
-            OR (start_time < ? AND end_time > ?)
-            OR (start_time >= ? AND start_time < ?)
-            OR (end_time > ? AND end_time <= ?)
-          )
+    const transaction = db.transaction(() => {
+      // 1. 结束当前正在进行的记录
+      db.prepare(
+        `
+        UPDATE time_entries
+        SET
+          end_time = datetime('now', 'localtime'),
+          duration_seconds = CAST((julianday(datetime('now', 'localtime')) - julianday(start_time)) * 86400 AS INTEGER),
+          updated_at = datetime('now', 'localtime')
+        WHERE end_time IS NULL
       `
+      ).run()
 
-      const queryParams = [
-        date,
-        endTime,
-        startTime,
-        endTime,
-        startTime,
-        startTime,
-        endTime,
-        startTime,
-        endTime,
-      ]
+      // 2. 创建新记录
+      const result = db
+        .prepare(
+          `
+        INSERT INTO time_entries (title, start_time, end_time, duration_seconds, description)
+        VALUES (?, datetime('now', 'localtime'), NULL, 0, ?)
+      `
+        )
+        .run(title, description || null)
 
-      if (excludeId) {
-        query += ' AND id != ?'
-        queryParams.push(excludeId)
+      const entryId = Number(result.lastInsertRowid)
+
+      // 3. 关联维度选项
+      const insertAttr = db.prepare(
+        'INSERT INTO entry_attributes (entry_id, option_id) VALUES (?, ?)'
+      )
+      for (const optionId of optionIds) {
+        insertAttr.run(entryId, optionId)
       }
 
-      const conflicts = db.prepare(query).all(...queryParams) as Array<{
-        id: number
-        activity: string
-        start_time: string
-        end_time: string
-      }>
+      return entryId
+    })
 
-      return conflicts
+    try {
+      const entryId = transaction()
+      return { success: true, id: entryId }
     } catch (error: any) {
       return {
-        error: error.message || '检测时间冲突失败',
+        error: error.message || '切换活动失败',
         code: 'DB_ERROR',
       }
     }
   }
 )
 
-// 创建时间段记录
+// 创建时间记录 (补录)
 ipcMain.handle(
   'timeEntries:create',
   async (
     _event,
-    data: {
-      categoryId: number
-      activity: string
+    params: {
+      title: string
       startTime: string
       endTime: string
-      date: string
-      notes?: string
+      optionIds: number[]
+      description?: string
     }
   ) => {
-    try {
-      const db = getDatabase()
-      const { categoryId, activity, startTime, endTime, date, notes } = data
+    const db = getDatabase()
+    const { title, startTime, endTime, optionIds, description } = params
 
-      // 计算时长（分钟）
-      const durationMinutes = calculateDuration(startTime, endTime)
-
-      if (durationMinutes <= 0) {
-        return {
-          error: '结束时间必须大于开始时间',
-          code: 'INVALID_TIME_RANGE',
-        }
-      }
-
-      if (durationMinutes > 1440) {
-        return {
-          error: '单次记录时长不能超过 24 小时',
-          code: 'DURATION_TOO_LONG',
-        }
-      }
-
-      // 插入记录
+    const transaction = db.transaction(() => {
+      // 1. 创建记录
       const result = db
         .prepare(
           `
-        INSERT INTO time_entries
-          (category_id, activity, start_time, end_time, duration_minutes, date, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO time_entries (title, start_time, end_time, duration_seconds, description)
+        VALUES (?, ?, ?, CAST((julianday(?) - julianday(?)) * 86400 AS INTEGER), ?)
       `
         )
-        .run(categoryId, activity, startTime, endTime, durationMinutes, date, notes || null)
+        .run(title, startTime, endTime, endTime, startTime, description || null)
 
-      return {
-        success: true,
-        id: Number(result.lastInsertRowid),
+      const entryId = Number(result.lastInsertRowid)
+
+      // 2. 关联维度选项
+      const insertAttr = db.prepare(
+        'INSERT INTO entry_attributes (entry_id, option_id) VALUES (?, ?)'
+      )
+      for (const optionId of optionIds) {
+        insertAttr.run(entryId, optionId)
       }
+
+      return entryId
+    })
+
+    try {
+      const entryId = transaction()
+      return { success: true, id: entryId }
     } catch (error: any) {
       return {
         error: error.message || '创建记录失败',
@@ -196,67 +222,79 @@ ipcMain.handle(
   }
 )
 
-// 更新时间段记录
+// 更新时间记录
 ipcMain.handle(
   'timeEntries:update',
   async (
     _event,
     id: number,
-    data: {
-      categoryId: number
-      activity: string
-      startTime: string
-      endTime: string
-      notes?: string
+    params: {
+      title?: string
+      startTime?: string
+      endTime?: string | null
+      optionIds?: number[]
+      description?: string
     }
   ) => {
+    const db = getDatabase()
+    const { title, startTime, endTime, optionIds, description } = params
+
+    const transaction = db.transaction(() => {
+      // 1. 更新基础字段
+      const updates: string[] = []
+      const values: any[] = []
+
+      if (title !== undefined) {
+        updates.push('title = ?')
+        values.push(title)
+      }
+      if (startTime !== undefined) {
+        updates.push('start_time = ?')
+        values.push(startTime)
+      }
+      if (endTime !== undefined) {
+        updates.push('end_time = ?')
+        values.push(endTime)
+        // 如果结束时间更新了，重新计算时长
+        if (endTime && (startTime || true)) {
+          // 需要获取最新的 startTime
+          const currentStartTime =
+            startTime ||
+            (db.prepare('SELECT start_time FROM time_entries WHERE id = ?').get(id) as any)
+              .start_time
+          updates.push('duration_seconds = CAST((julianday(?) - julianday(?)) * 86400 AS INTEGER)')
+          values.push(endTime, currentStartTime)
+        } else if (endTime === null) {
+          updates.push('duration_seconds = 0')
+        }
+      }
+      if (description !== undefined) {
+        updates.push('description = ?')
+        values.push(description)
+      }
+
+      if (updates.length > 0) {
+        updates.push("updated_at = datetime('now', 'localtime')")
+        values.push(id)
+        db.prepare(`UPDATE time_entries SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+      }
+
+      // 2. 更新维度属性 (先删后插)
+      if (optionIds !== undefined) {
+        db.prepare('DELETE FROM entry_attributes WHERE entry_id = ?').run(id)
+        const insertAttr = db.prepare(
+          'INSERT INTO entry_attributes (entry_id, option_id) VALUES (?, ?)'
+        )
+        for (const optionId of optionIds) {
+          insertAttr.run(id, optionId)
+        }
+      }
+
+      return true
+    })
+
     try {
-      const db = getDatabase()
-      const { categoryId, activity, startTime, endTime, notes } = data
-
-      // 获取原记录的日期（更新时不改变日期）
-      const existing = db
-        .prepare('SELECT date FROM time_entries WHERE id = ?')
-        .get(id) as { date: string } | undefined
-
-      if (!existing) {
-        return {
-          error: '记录不存在',
-          code: 'NOT_FOUND',
-        }
-      }
-
-      // 计算时长（分钟）
-      const durationMinutes = calculateDuration(startTime, endTime)
-
-      if (durationMinutes <= 0) {
-        return {
-          error: '结束时间必须大于开始时间',
-          code: 'INVALID_TIME_RANGE',
-        }
-      }
-
-      if (durationMinutes > 1440) {
-        return {
-          error: '单次记录时长不能超过 24 小时',
-          code: 'DURATION_TOO_LONG',
-        }
-      }
-
-      // 更新记录
-      db.prepare(
-        `
-        UPDATE time_entries
-        SET category_id = ?,
-            activity = ?,
-            start_time = ?,
-            end_time = ?,
-            duration_minutes = ?,
-            notes = ?
-        WHERE id = ?
-      `
-      ).run(categoryId, activity, startTime, endTime, durationMinutes, notes || null, id)
-
+      transaction()
       return { success: true }
     } catch (error: any) {
       return {
@@ -267,26 +305,11 @@ ipcMain.handle(
   }
 )
 
-// 删除时间段记录
+// 删除时间记录
 ipcMain.handle('timeEntries:delete', async (_event, id: number) => {
   try {
     const db = getDatabase()
-
-    // 检查记录是否存在
-    const existing = db
-      .prepare('SELECT id FROM time_entries WHERE id = ?')
-      .get(id)
-
-    if (!existing) {
-      return {
-        error: '记录不存在',
-        code: 'NOT_FOUND',
-      }
-    }
-
-    // 删除记录
     db.prepare('DELETE FROM time_entries WHERE id = ?').run(id)
-
     return { success: true }
   } catch (error: any) {
     return {
@@ -296,102 +319,96 @@ ipcMain.handle('timeEntries:delete', async (_event, id: number) => {
   }
 })
 
-// 按日期范围查询记录
-ipcMain.handle(
-  'timeEntries:getByDateRange',
-  async (
-    _event,
-    params: {
-      startDate: string
-      endDate: string
-      categoryIds?: number[]
-      keyword?: string
-      limit?: number
-      offset?: number
-    }
-  ) => {
-    try {
-      const db = getDatabase()
-      const {
-        startDate,
-        endDate,
-        categoryIds,
-        keyword,
-        limit = 20,
-        offset = 0,
-      } = params
-
-      // 构建查询条件
-      const conditions: string[] = ['te.date BETWEEN ? AND ?']
-      const queryParams: any[] = [startDate, endDate]
-
-      if (categoryIds && categoryIds.length > 0) {
-        const placeholders = categoryIds.map(() => '?').join(',')
-        conditions.push(`te.category_id IN (${placeholders})`)
-        queryParams.push(...categoryIds)
-      }
-
-      if (keyword) {
-        conditions.push('te.activity LIKE ?')
-        queryParams.push(`%${keyword}%`)
-      }
-
-      const whereClause = conditions.join(' AND ')
-
-      // 查询总数
-      const totalResult = db
-        .prepare(
-          `
-        SELECT COUNT(*) AS total
-        FROM time_entries te
-        WHERE ${whereClause}
-      `
-        )
-        .get(...queryParams) as { total: number }
-
-      // 查询数据
-      const entries = db
-        .prepare(
-          `
+// Gap 检测
+ipcMain.handle('timeEntries:detectGaps', async (_event, date: string) => {
+  try {
+    const db = getDatabase()
+    const gaps = db
+      .prepare(
+        `
+      WITH ordered_entries AS (
         SELECT
-          te.id,
-          te.activity,
-          te.start_time,
-          te.end_time,
-          te.duration_minutes,
-          te.date,
-          c.id AS category_id,
-          c.name AS category_name,
-          c.color AS category_color
-        FROM time_entries te
-        INNER JOIN categories c ON te.category_id = c.id
-        WHERE ${whereClause}
-        ORDER BY te.date DESC, te.start_time DESC
-        LIMIT ? OFFSET ?
-      `
-        )
-        .all(...queryParams, limit, offset) as Array<{
-        id: number
-        activity: string
-        start_time: string
-        end_time: string
-        duration_minutes: number
-        date: string
-        category_id: number
-        category_name: string
-        category_color: string
-      }>
+          id,
+          start_time,
+          end_time,
+          LEAD(start_time) OVER (ORDER BY start_time) AS next_start
+        FROM time_entries
+        WHERE DATE(start_time) = ?
+      )
+      SELECT
+        end_time AS start_time,
+        next_start AS end_time,
+        CAST((julianday(next_start) - julianday(end_time)) * 86400 AS INTEGER) AS duration_seconds
+      FROM ordered_entries
+      WHERE next_start IS NOT NULL
+        AND end_time IS NOT NULL
+        AND end_time < next_start
+    `
+      )
+      .all(date) as Gap[]
 
-      return {
-        data: entries,
-        total: totalResult.total,
-      }
-    } catch (error: any) {
-      return {
-        error: error.message || '查询记录失败',
-        code: 'DB_ERROR',
-      }
+    return gaps
+  } catch (error: any) {
+    return {
+      error: error.message || '检测 Gap 失败',
+      code: 'DB_ERROR',
     }
   }
-)
+})
 
+// 智能默认 (基于事项名称获取最近一次使用的维度选项)
+ipcMain.handle('activities:getSmartDefaults', async (_event, title: string) => {
+  try {
+    const db = getDatabase()
+    const lastEntry = db
+      .prepare(
+        `
+      SELECT id
+      FROM time_entries
+      WHERE title = ?
+      ORDER BY start_time DESC
+      LIMIT 1
+    `
+      )
+      .get(title) as { id: number } | undefined
+
+    if (!lastEntry) return []
+
+    const optionIds = db
+      .prepare('SELECT option_id FROM entry_attributes WHERE entry_id = ?')
+      .all(lastEntry.id) as Array<{ option_id: number }>
+
+    return optionIds.map((item) => item.option_id)
+  } catch (error: any) {
+    return {
+      error: error.message || '获取智能默认失败',
+      code: 'DB_ERROR',
+    }
+  }
+})
+
+// 搜索历史事项（自动补全）
+ipcMain.handle('activities:search', async (_event, keyword: string) => {
+  try {
+    const db = getDatabase()
+    const activities = db
+      .prepare(
+        `
+      SELECT DISTINCT title
+      FROM time_entries
+      WHERE title LIKE ? || '%'
+      GROUP BY title
+      ORDER BY MAX(created_at) DESC
+      LIMIT 10
+    `
+      )
+      .all(keyword) as Array<{ title: string }>
+
+    return activities.map((item) => item.title)
+  } catch (error: any) {
+    return {
+      error: error.message || '搜索事项失败',
+      code: 'DB_ERROR',
+    }
+  }
+})

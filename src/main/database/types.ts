@@ -1,25 +1,49 @@
-// 数据库表类型定义
-
-export interface Category {
+export interface Dimension {
   id: number
   name: string
-  color: string
-  sort_order: number
   is_active: number
+  order: number
   created_at: string
   updated_at: string
 }
 
-export interface TimeEntry {
+export interface DimensionOption {
   id: number
-  category_id: number
-  activity: string
+  dimension_id: number
+  name: string
+  color: string
+  order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface EntryAttribute {
+  id: number
+  entry_id: number
+  option_id: number
+  created_at: string
+}
+
+export interface TimeEntryWithDimensions {
+  id: number
+  title: string
+  start_time: string
+  end_time: string | null
+  duration_seconds: number
+  description?: string
+  created_at: string
+  updated_at: string
+  dimensions: Array<{
+    dimension_id: number
+    dimension_name: string
+    option_id: number
+    option_name: string
+    option_color: string
+  }>
+}
+
+export interface Gap {
   start_time: string
   end_time: string
-  duration_minutes: number
-  date: string
-  notes: string | null
-  created_at: string
-  updated_at: string
+  duration_seconds: number
 }
-

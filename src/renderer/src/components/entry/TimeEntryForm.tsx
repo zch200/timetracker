@@ -9,7 +9,6 @@ import { ActivityAutocomplete } from "./ActivityAutocomplete";
 import { TimeEntryFormValues, timeEntrySchema } from "@/schemas/timeEntry";
 import { useTimeEntriesStore } from "@/store/timeEntriesStore";
 import { api } from "@/lib/api";
-import { ConflictDialog } from "./ConflictDialog";
 
 interface TimeEntryFormProps {
   initialData?: Partial<TimeEntryFormValues> & { id?: number };
@@ -18,64 +17,49 @@ interface TimeEntryFormProps {
 }
 
 export function TimeEntryForm({ initialData, onSuccess, onCancel }: TimeEntryFormProps) {
-  const [showConflict, setShowConflict] = useState(false);
-  const [conflicts, setConflicts] = useState<any[]>([]);
-  const [pendingData, setPendingData] = useState<TimeEntryFormValues | null>(null);
-  
-  const { fetchByDate } = useTimeEntriesStore();
+  const { fetchByDate, detectGaps } = useTimeEntriesStore();
 
   const { control, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<TimeEntryFormValues>({
     resolver: zodResolver(timeEntrySchema),
     defaultValues: {
-      startTime: initialData?.startTime || '',
-      endTime: initialData?.endTime || '',
+      startTime: initialData?.startTime ? initialData.startTime.split('T')[1]?.slice(0, 5) : '', // Handle full ISO string if passed
+      endTime: initialData?.endTime ? initialData.endTime.split('T')[1]?.slice(0, 5) : '',
       activity: initialData?.activity || '',
-      categoryId: initialData?.categoryId ? String(initialData.categoryId) : '',
+      categoryId: initialData?.categoryId || '',
       date: initialData?.date || new Date().toISOString().split('T')[0],
     }
   });
 
   const onSubmit = async (data: TimeEntryFormValues) => {
-    try {
-      // Check for conflicts
-      const result = await api.checkTimeConflict({
-        date: data.date,
-        startTime: data.startTime,
-        endTime: data.endTime,
-        excludeId: initialData?.id,
-      });
-
-      if (Array.isArray(result) && result.length > 0) {
-        setConflicts(result);
-        setPendingData(data);
-        setShowConflict(true);
-        return;
-      }
-
-      await saveData(data);
-    } catch (error: any) {
-      toast.error(error.message || "保存失败");
-    }
+    await saveData(data);
   };
 
   const saveData = async (data: TimeEntryFormValues) => {
     try {
+      const fullStartTime = `${data.date}T${data.startTime}:00`;
+      const fullEndTime = `${data.date}T${data.endTime}:00`;
+
       if (initialData?.id) {
         await api.updateTimeEntry(initialData.id, {
-          ...data,
-          categoryId: parseInt(data.categoryId),
+          title: data.activity,
+          startTime: fullStartTime,
+          endTime: fullEndTime,
+          optionIds: [parseInt(data.categoryId)],
         });
         toast.success("更新成功");
       } else {
         await api.createTimeEntry({
-          ...data,
-          categoryId: parseInt(data.categoryId),
+          title: data.activity,
+          startTime: fullStartTime,
+          endTime: fullEndTime,
+          optionIds: [parseInt(data.categoryId)],
         });
         toast.success("保存成功");
         reset();
       }
       
       await fetchByDate(data.date);
+      await detectGaps(data.date);
       onSuccess?.();
     } catch (error: any) {
       toast.error(error.message || "操作失败");
@@ -133,7 +117,7 @@ export function TimeEntryForm({ initialData, onSuccess, onCancel }: TimeEntryFor
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium">分类</label>
+          <label className="text-sm font-medium">标签</label>
           <Controller
             name="categoryId"
             control={control}
@@ -158,18 +142,6 @@ export function TimeEntryForm({ initialData, onSuccess, onCancel }: TimeEntryFor
           )}
         </div>
       </form>
-
-      {showConflict && pendingData && (
-        <ConflictDialog
-          conflicts={conflicts}
-          onConfirm={() => {
-            setShowConflict(false);
-            saveData(pendingData);
-          }}
-          onCancel={() => setShowConflict(false)}
-        />
-      )}
     </div>
   );
 }
-

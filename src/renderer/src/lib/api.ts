@@ -1,61 +1,105 @@
 import type {
-  Category,
-  TimeEntry,
-  CategoryStats,
-  TrendDataPoint,
-  ActivityRanking,
-  CreateCategoryParams,
-  UpdateCategoryParams,
+  DimensionWithOptions,
+  TimeEntryWithDimensions,
+  Gap,
+  CreateDimensionParams,
+  UpdateDimensionParams,
+  CreateOptionParams,
+  UpdateOptionParams,
   CreateTimeEntryParams,
+  SwitchActivityParams,
   UpdateTimeEntryParams,
-  CheckConflictParams,
-  ConflictEntry,
   GetByDateRangeParams,
   ExportExcelParams,
-  GetCategoryStatsParams,
   GetTrendDataParams,
+  TrendDataPoint,
   GetTotalHoursParams,
   GetActivityRankingParams,
+  ActivityRanking,
   SuccessResponse,
   ExportExcelResult,
   ExportCancelled,
   ApiError,
+  DimensionStats,
+  GetDimensionStatsParams,
 } from '../types/api-types'
 
 class TimeTrackerAPI {
   private async invoke(channel: string, ...args: any[]): Promise<any> {
     if (typeof window === 'undefined' || !window.electron) {
-      console.warn(`Electron IPC not available for channel: ${channel}. Are you running in a web browser?`);
-      return { error: 'Electron IPC not available', code: 'IPC_NOT_AVAILABLE' };
+      console.warn(
+        `Electron IPC not available for channel: ${channel}. Are you running in a web browser?`
+      )
+      return { error: 'Electron IPC not available', code: 'IPC_NOT_AVAILABLE' }
     }
-    return window.electron.invoke(channel, ...args);
+    return window.electron.invoke(channel, ...args)
   }
 
-  // 分类管理 API
-  async getAllCategories(): Promise<Category[] | ApiError> {
-    return this.invoke('categories:getAll')
+  // 维度管理 API
+  async getAllDimensions(): Promise<DimensionWithOptions[] | ApiError> {
+    return this.invoke('dimensions:getAll')
   }
 
-  async createCategory(
-    params: CreateCategoryParams
+  async createDimension(
+    params: CreateDimensionParams
   ): Promise<SuccessResponse | ApiError> {
-    return this.invoke('categories:create', params)
+    return this.invoke('dimensions:create', params)
   }
 
-  async updateCategory(
+  async updateDimension(
     id: number,
-    params: UpdateCategoryParams
+    params: UpdateDimensionParams
   ): Promise<SuccessResponse | ApiError> {
-    return this.invoke('categories:update', id, params)
+    return this.invoke('dimensions:update', id, params)
   }
 
-  async deleteCategory(id: number): Promise<SuccessResponse | ApiError> {
-    return this.invoke('categories:delete', id)
+  async deleteDimension(id: number): Promise<SuccessResponse | ApiError> {
+    return this.invoke('dimensions:delete', id)
+  }
+
+  async toggleDimension(id: number, isActive: boolean): Promise<SuccessResponse | ApiError> {
+    return this.invoke('dimensions:toggle', id, isActive)
+  }
+
+  async createOption(
+    dimensionId: number,
+    params: CreateOptionParams
+  ): Promise<SuccessResponse | ApiError> {
+    return this.invoke('options:create', { ...params, dimension_id: dimensionId })
+  }
+
+  async updateOption(
+    id: number,
+    params: UpdateOptionParams
+  ): Promise<SuccessResponse | ApiError> {
+    return this.invoke('options:update', id, params)
+  }
+
+  async deleteOption(id: number): Promise<SuccessResponse | ApiError> {
+    return this.invoke('options:delete', id)
   }
 
   // 时间段记录 API
-  async getTimeEntriesByDate(date: string): Promise<TimeEntry[] | ApiError> {
+  async getTimeEntriesByDate(date: string): Promise<TimeEntryWithDimensions[] | ApiError> {
     return this.invoke('timeEntries:getByDate', date)
+  }
+
+  async getCurrentActive(): Promise<TimeEntryWithDimensions | null | ApiError> {
+    return this.invoke('timeEntries:getCurrentActive')
+  }
+
+  async switchActivity(
+    params: SwitchActivityParams
+  ): Promise<SuccessResponse | ApiError> {
+    return this.invoke('timeEntries:switch', params)
+  }
+
+  async detectGaps(date: string): Promise<Gap[] | ApiError> {
+    return this.invoke('timeEntries:detectGaps', date)
+  }
+
+  async getSmartDefaults(title: string): Promise<number[] | ApiError> {
+    return this.invoke('activities:getSmartDefaults', title)
   }
 
   async createTimeEntry(
@@ -75,15 +119,9 @@ class TimeTrackerAPI {
     return this.invoke('timeEntries:delete', id)
   }
 
-  async checkTimeConflict(
-    params: CheckConflictParams
-  ): Promise<ConflictEntry[] | ApiError> {
-    return this.invoke('timeEntries:checkConflict', params)
-  }
-
   async getTimeEntriesByDateRange(
     params: GetByDateRangeParams
-  ): Promise<{ data: TimeEntry[]; total: number } | ApiError> {
+  ): Promise<{ data: TimeEntryWithDimensions[]; total: number } | ApiError> {
     return this.invoke('timeEntries:getByDateRange', params)
   }
 
@@ -92,16 +130,16 @@ class TimeTrackerAPI {
   }
 
   // 数据分析 API
-  async getCategoryStats(
-    params: GetCategoryStatsParams
-  ): Promise<CategoryStats[] | ApiError> {
-    return this.invoke('analysis:getCategoryStats', params)
+  async getDimensionStats(
+    params: GetDimensionStatsParams
+  ): Promise<DimensionStats[] | ApiError> {
+    return this.invoke('analysis:statsByDimension', params)
   }
 
   async getTrendData(
     params: GetTrendDataParams
   ): Promise<TrendDataPoint[] | ApiError> {
-    return this.invoke('analysis:getTrendData', params)
+    return this.invoke('analysis:trendByDimension', params)
   }
 
   async getTotalHours(
@@ -125,4 +163,4 @@ class TimeTrackerAPI {
 }
 
 export const api = new TimeTrackerAPI()
-
+export default api

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { DateNavigator } from "./DateNavigator";
-import { DailyStatsCard } from "./DailyStatsCard";
 import { TimeEntryList } from "./TimeEntryList";
 import { ManualEntryModal } from "./ManualEntryModal";
 import { cn } from "@/lib/utils";
@@ -24,9 +23,9 @@ export function RecordsSidebar({ className, manualEntryOpen, onManualEntryOpenCh
         />
       </div>
       
-      <DailyStatsCard />
+      {/* DailyStatsCard removed from here as it is in SwitchPanel now */}
       
-      <div className="flex-1 overflow-y-auto p-4 bg-slate-50/30">
+      <div className="flex-1 overflow-y-auto p-0 bg-white">
         <TimeEntryList />
       </div>
       

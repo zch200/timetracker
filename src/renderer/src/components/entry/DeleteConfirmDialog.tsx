@@ -8,10 +8,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { TimeEntry } from "@/types/api-types";
+import { TimeEntryWithDimensions } from "@/types/api-types";
+import { formatTime } from "@/utils/date";
 
 interface DeleteConfirmDialogProps {
-  entry: TimeEntry;
+  entry: TimeEntryWithDimensions;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -27,9 +28,17 @@ export function DeleteConfirmDialog({ entry, onConfirm, onCancel }: DeleteConfir
           </DialogDescription>
         </DialogHeader>
         <div className="py-4 bg-slate-50 rounded p-3 text-sm">
-          <div className="font-mono text-slate-500">{entry.start_time} - {entry.end_time}</div>
-          <div className="font-medium mt-1">{entry.activity}</div>
-          <div className="text-xs text-slate-400 mt-1">{entry.category_name}</div>
+          <div className="font-mono text-slate-500">
+            {formatTime(entry.start_time)} - {entry.end_time ? formatTime(entry.end_time) : 'Now'}
+          </div>
+          <div className="font-medium mt-1">{entry.title}</div>
+          <div className="flex gap-1 mt-1 flex-wrap">
+            {entry.dimensions.map(d => (
+              <span key={d.option_id} className="text-xs text-slate-500 bg-white border border-slate-200 px-1 rounded">
+                {d.dimension_name}:{d.option_name}
+              </span>
+            ))}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>取消</Button>
@@ -39,4 +48,3 @@ export function DeleteConfirmDialog({ entry, onConfirm, onCancel }: DeleteConfir
     </Dialog>
   );
 }
-

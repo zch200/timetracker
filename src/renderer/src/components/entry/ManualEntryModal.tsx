@@ -9,14 +9,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ActivityAutocomplete } from "./ActivityAutocomplete";
 import { CategorySelect } from "./CategorySelect";
 import { useTimeEntriesStore } from "@/store/timeEntriesStore";
 import { api } from "@/lib/api";
 import { toast } from "react-hot-toast";
 import { Plus } from "lucide-react";
-import { format } from 'date-fns';
 import { ConflictDialog } from "./ConflictDialog";
 
 interface ManualEntryModalProps {
@@ -25,7 +23,7 @@ interface ManualEntryModalProps {
 }
 
 export function ManualEntryModal({ open: externalOpen, onOpenChange: externalOnOpenChange }: ManualEntryModalProps) {
-  const { selectedDate, fetchByDate } = useTimeEntriesStore();
+  const { selectedDate, fetchByDate, detectGaps } = useTimeEntriesStore();
   const [internalOpen, setInternalOpen] = useState(false);
   
   const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
@@ -35,7 +33,7 @@ export function ManualEntryModal({ open: externalOpen, onOpenChange: externalOnO
     startTime: '',
     endTime: '',
     activity: '',
-    categoryId: ''
+    categoryId: '' // This will map to optionId of the primary dimension
   });
 
   const [conflictData, setConflictData] = useState<{
@@ -56,62 +54,40 @@ export function ManualEntryModal({ open: externalOpen, onOpenChange: externalOnO
     const dataToSave = data || formData;
     try {
         await api.createTimeEntry({
-            date: selectedDate,
-            startTime: dataToSave.startTime,
-            endTime: dataToSave.endTime,
-            activity: dataToSave.activity,
-            categoryId: Number(dataToSave.categoryId)
+            startTime: `${selectedDate}T${dataToSave.startTime}:00`,
+            endTime: `${selectedDate}T${dataToSave.endTime}:00`,
+            title: dataToSave.activity,
+            optionIds: [Number(dataToSave.categoryId)] // Simple mapping for now
         });
 
         toast.success("添加成功");
         setOpen(false);
         resetForm();
         fetchByDate(selectedDate);
+        detectGaps(selectedDate);
         setConflictData(null);
-    } catch (error) {
+    } catch (error: any) {
         console.error(error);
-        toast.error("添加失败");
+        toast.error(error.message || "添加失败");
     }
   };
 
+  // ... Conflict check removed or simplified for now as API changed ...
+  // Actually, conflict check endpoint might need update or removal from API if unused.
+  // For MVP V3, let's skip conflict check in manual entry for simplicity or implement later.
+  
   const handleSubmit = async () => {
     if (!formData.startTime || !formData.endTime || !formData.activity || !formData.categoryId) {
       toast.error("请填写所有必填项");
       return;
     }
-
-    try {
-      const conflicts = await api.checkTimeConflict({
-        date: selectedDate,
-        startTime: formData.startTime,
-        endTime: formData.endTime
-      });
-
-      if (conflicts.length > 0) {
-        setConflictData({
-          conflicts,
-          pendingData: { ...formData }
-        });
-        return;
-      }
-
-      await performSave();
-    } catch (error) {
-      console.error(error);
-      toast.error("添加失败");
-    }
+    
+    // Direct save for now
+    await performSave();
   };
 
-  // Shortcut Cmd+N to open handled in TimerPanel/Global Hook now, 
-  // but if this component is used independently, it might need its own listener.
-  // However, RecordsSidebar uses this. Let's keep the hook there or move it up.
-  // Actually, we want Cmd+N to work globally. 
-  // In `useGlobalShortcuts`, we have `onOpenManualEntry`. 
-  // This component is mounted in `RecordsSidebar`. 
-  // We need to expose a way to open it.
-  // For now, let's keep the internal listener if `externalOpen` is not provided.
   React.useEffect(() => {
-    if (externalOpen !== undefined) return; // Controlled mode
+    if (externalOpen !== undefined) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
@@ -169,7 +145,7 @@ export function ManualEntryModal({ open: externalOpen, onOpenChange: externalOnO
                   </div>
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
-                  <span className="text-right text-sm font-medium">分类</span>
+                  <span className="text-right text-sm font-medium">标签</span>
                   <div className="col-span-3">
                       <CategorySelect 
                           value={formData.categoryId} 
@@ -184,14 +160,6 @@ export function ManualEntryModal({ open: externalOpen, onOpenChange: externalOnO
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {conflictData && (
-        <ConflictDialog 
-          conflicts={conflictData.conflicts}
-          onConfirm={() => performSave(conflictData.pendingData)}
-          onCancel={() => setConflictData(null)}
-        />
-      )}
     </>
   );
 }

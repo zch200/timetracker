@@ -1,57 +1,60 @@
-import React, { useEffect, useState } from 'react';
-import { useAnalysisStore } from "@/store/analysisStore";
-import { useCategoriesStore } from "@/store/categoriesStore";
-import { TimeDimensionTabs } from "@/components/analysis/TimeDimensionTabs";
+import React, { useEffect } from 'react';
 import { StatsCards } from "@/components/analysis/StatsCards";
+import { DimensionPieChart } from "@/components/analysis/DimensionPieChart";
 import { TrendLineChart } from "@/components/analysis/TrendLineChart";
-import { CategoryPieChart } from "@/components/analysis/CategoryPieChart";
-import { TimeDimension, getDateRangeByDimension } from "@/utils/date";
+import { TimeDimensionTabs } from "@/components/analysis/TimeDimensionTabs";
+import { useAnalysisStore } from "@/store/analysisStore";
+import { getDateRangeByDimension, TimeDimension } from "@/utils/date";
 
 export default function AnalysisPage() {
-  const [dimension, setDimension] = useState<TimeDimension>('week');
-  const { dateRange, setDateRange, fetchCategoryStats, fetchTrendData, fetchTotalHours } = useAnalysisStore();
-  const { fetchCategories } = useCategoriesStore();
+  const { 
+    setDateRange, 
+    dateRange,
+    fetchTotalHours
+  } = useAnalysisStore();
+
+  const handleTimeDimensionChange = (dimension: TimeDimension) => {
+    const { startDate, endDate } = getDateRangeByDimension(dimension);
+    setDateRange(startDate, endDate);
+  };
 
   useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
+    // Initial load - week view
+    const { startDate, endDate } = getDateRangeByDimension('week');
+    setDateRange(startDate, endDate);
+  }, []);
 
   useEffect(() => {
-    if (dimension !== 'custom') {
-      const range = getDateRangeByDimension(dimension);
-      setDateRange(range.startDate, range.endDate);
+    if (dateRange.startDate && dateRange.endDate) {
+      fetchTotalHours({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      // Individual charts trigger their own data fetching based on store state (dateRange + dimension)
     }
-  }, [dimension, setDateRange]);
-
-  useEffect(() => {
-    const params = { startDate: dateRange.startDate, endDate: dateRange.endDate };
-    fetchCategoryStats(params);
-    fetchTrendData({ ...params, groupBy: dimension === 'today' ? 'hour' : 'day' });
-    fetchTotalHours(params);
-  }, [dateRange, dimension, fetchCategoryStats, fetchTrendData, fetchTotalHours]);
+  }, [dateRange, fetchTotalHours]);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="max-w-6xl mx-auto space-y-6 p-6 pb-12">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-slate-900">数据分析</h1>
-        <TimeDimensionTabs value={dimension} onValueChange={setDimension} />
+        <TimeDimensionTabs onChange={handleTimeDimensionChange} />
       </div>
-
+      
       <StatsCards />
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <div className="md:col-span-2">
-          <TrendLineChart />
-        </div>
-        <div>
-          <CategoryPieChart />
-        </div>
-        <div className="bg-white p-6 rounded-lg border shadow-sm flex flex-col justify-center items-center text-center">
-          <h3 className="text-lg font-semibold text-slate-700 mb-2">更多分析功能</h3>
-          <p className="text-slate-400 text-sm max-w-[250px]">
-            事项排行榜、多维度对比功能正在开发中，敬请期待。
-          </p>
-        </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <DimensionPieChart />
+        {/* Trend chart takes full width on mobile, half on desktop? 
+            Wait, in TrendLineChart I set md:col-span-2. 
+            Let's adjust layout grid. 
+            Maybe Pie Chart on left (1 col), Ranking on right? 
+            Trend Chart full width below?
+        */}
+      </div>
+      
+      <div className="grid grid-cols-1">
+        <TrendLineChart />
       </div>
     </div>
   );

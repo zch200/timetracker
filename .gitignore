@@ -28,3 +28,14 @@ dist-electron
 *.db-shm
 *.db-wal
 
+# pnpm
+.pnpm-store
+
+# Build output
+out/
+
+# Temporary files
+*.md
+!README.md
+!CLAUDE.md
+!docs/**/*.md

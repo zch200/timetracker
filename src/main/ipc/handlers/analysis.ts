@@ -1,69 +1,68 @@
 import { ipcMain } from 'electron'
 import { getDatabase } from '../../database'
 
-// 获取分类统计数据
+// 获取按维度聚合的统计数据
 ipcMain.handle(
-  'analysis:getCategoryStats',
+  'analysis:statsByDimension',
   async (
     _event,
     params: {
+      dimensionId: number
       startDate: string
       endDate: string
     }
   ) => {
     try {
       const db = getDatabase()
-      const { startDate, endDate } = params
+      const { dimensionId, startDate, endDate } = params
 
-      // 计算总时长（用于计算百分比）
+      // 1. 计算总时长（该维度下的总时长，或者总时间范围内的总时长？通常是总时长以便计算占比）
+      // 需求描述：SUM(te.duration_seconds) * 100.0 / (SELECT SUM(duration_seconds) FROM time_entries WHERE ... )
       const totalResult = db
         .prepare(
           `
-        SELECT COALESCE(SUM(duration_minutes), 0) AS total_minutes
+        SELECT COALESCE(SUM(duration_seconds), 0) AS total_seconds
         FROM time_entries
-        WHERE date BETWEEN ? AND ?
+        WHERE DATE(start_time) BETWEEN ? AND ?
       `
         )
-        .get(startDate, endDate) as { total_minutes: number }
+        .get(startDate, endDate) as { total_seconds: number }
 
-      const totalMinutes = totalResult.total_minutes
+      const totalSeconds = totalResult.total_seconds
 
-      // 获取各分类统计
+      // 2. 获取该维度下各选项的统计
       const stats = db
         .prepare(
           `
         SELECT
-          c.id,
-          c.name,
-          c.color,
-          COALESCE(SUM(te.duration_minutes), 0) / 60.0 AS total_hours,
+          do.id AS option_id,
+          do.name AS option_name,
+          do.color AS color,
+          COALESCE(SUM(te.duration_seconds), 0) / 3600.0 AS hours,
+          COALESCE(SUM(te.duration_seconds), 0) AS seconds,
           COALESCE(
             CASE
-              WHEN ? > 0 THEN (SUM(te.duration_minutes) * 100.0 / ?)
+              WHEN ? > 0 THEN (SUM(te.duration_seconds) * 100.0 / ?)
               ELSE 0
             END,
             0
           ) AS percentage,
-          COUNT(te.id) AS entry_count
-        FROM categories c
-        LEFT JOIN time_entries te
-          ON c.id = te.category_id
-          AND te.date BETWEEN ? AND ?
-        WHERE c.is_active = 1
-        GROUP BY c.id, c.name, c.color
-        ORDER BY total_hours DESC
+          COUNT(DISTINCT te.id) AS entry_count
+        FROM dimension_options do
+        LEFT JOIN entry_attributes ea ON do.id = ea.option_id
+        LEFT JOIN time_entries te ON ea.entry_id = te.id AND DATE(te.start_time) BETWEEN ? AND ?
+        WHERE do.dimension_id = ?
+        GROUP BY do.id, do.name, do.color
+        HAVING hours > 0
+        ORDER BY hours DESC;
       `
         )
-        .all(
-          totalMinutes,
-          totalMinutes,
-          startDate,
-          endDate
-        ) as Array<{
-        id: number
-        name: string
+        .all(totalSeconds, totalSeconds, startDate, endDate, dimensionId) as Array<{
+        option_id: number
+        option_name: string
         color: string
-        total_hours: number
+        hours: number
+        seconds: number
         percentage: number
         entry_count: number
       }>
@@ -71,19 +70,20 @@ ipcMain.handle(
       return stats
     } catch (error: any) {
       return {
-        error: error.message || '获取分类统计失败',
+        error: error.message || '获取维度统计失败',
         code: 'DB_ERROR',
       }
     }
   }
 )
 
-// 获取趋势数据
+// 获取按维度选项的趋势数据
 ipcMain.handle(
-  'analysis:getTrendData',
+  'analysis:trendByDimension',
   async (
     _event,
     params: {
+      dimensionId: number
       startDate: string
       endDate: string
       groupBy: 'day' | 'week'
@@ -91,36 +91,37 @@ ipcMain.handle(
   ) => {
     try {
       const db = getDatabase()
-      const { startDate, endDate, groupBy } = params
+      const { dimensionId, startDate, endDate, groupBy } = params
 
-      // 根据 groupBy 选择日期分组方式
       const dateGroupClause =
         groupBy === 'day'
-          ? "te.date"
-          : "strftime('%Y-W%W', te.date) || '-' || strftime('%w', te.date)"
+          ? "DATE(te.start_time)"
+          : "strftime('%Y-W%W', te.start_time) || '-' || strftime('%w', te.start_time)"
 
       const trendData = db
         .prepare(
           `
         SELECT
           ${dateGroupClause} AS date_group,
-          c.id AS category_id,
-          c.name AS category_name,
-          c.color,
-          SUM(te.duration_minutes) / 60.0 AS total_hours
+          do.id AS option_id,
+          do.name AS option_name,
+          do.color,
+          SUM(te.duration_seconds) / 3600.0 AS hours
         FROM time_entries te
-        INNER JOIN categories c ON te.category_id = c.id
-        WHERE te.date BETWEEN ? AND ?
-        GROUP BY date_group, c.id, c.name, c.color
-        ORDER BY date_group ASC, c.sort_order ASC
+        JOIN entry_attributes ea ON te.id = ea.entry_id
+        JOIN dimension_options do ON ea.option_id = do.id
+        WHERE do.dimension_id = ?
+          AND DATE(te.start_time) BETWEEN ? AND ?
+        GROUP BY date_group, do.id, do.name, do.color
+        ORDER BY date_group ASC, hours DESC
       `
         )
-        .all(startDate, endDate) as Array<{
+        .all(dimensionId, startDate, endDate) as Array<{
         date_group: string
-        category_id: number
-        category_name: string
+        option_id: number
+        option_name: string
         color: string
-        total_hours: number
+        hours: number
       }>
 
       return trendData
@@ -133,7 +134,7 @@ ipcMain.handle(
   }
 )
 
-// 获取总用时
+// 获取总用时 (原有逻辑复用，只需确保表名正确)
 ipcMain.handle(
   'analysis:getTotalHours',
   async (
@@ -151,10 +152,10 @@ ipcMain.handle(
         .prepare(
           `
         SELECT
-          COALESCE(SUM(duration_minutes), 0) / 60.0 AS total_hours,
+          COALESCE(SUM(duration_seconds), 0) / 3600.0 AS total_hours,
           COUNT(*) AS total_entries
         FROM time_entries
-        WHERE date BETWEEN ? AND ?
+        WHERE DATE(start_time) BETWEEN ? AND ?
       `
         )
         .get(startDate, endDate) as {
@@ -175,7 +176,7 @@ ipcMain.handle(
   }
 )
 
-// 获取事项时长排行
+// 获取事项时长排行 (原有逻辑适配)
 ipcMain.handle(
   'analysis:getActivityRanking',
   async (
@@ -194,12 +195,12 @@ ipcMain.handle(
         .prepare(
           `
         SELECT
-          activity,
-          SUM(duration_minutes) / 60.0 AS total_hours,
+          title AS activity,
+          SUM(duration_seconds) / 3600.0 AS total_hours,
           COUNT(*) AS frequency
         FROM time_entries
-        WHERE date BETWEEN ? AND ?
-        GROUP BY activity
+        WHERE DATE(start_time) BETWEEN ? AND ?
+        GROUP BY title
         ORDER BY total_hours DESC
         LIMIT ?
       `
@@ -219,4 +220,3 @@ ipcMain.handle(
     }
   }
 )
-

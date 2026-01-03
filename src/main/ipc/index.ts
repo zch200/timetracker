@@ -1,6 +1,6 @@
 // IPC handlers 导入（会自动注册）
 import './handlers'
-import './handlers/categories'
+import './handlers/dimensions'
 import './handlers/timeEntries'
 import './handlers/analysis'
 import './handlers/export'

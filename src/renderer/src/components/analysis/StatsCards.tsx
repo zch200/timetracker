@@ -4,7 +4,7 @@ import { useAnalysisStore } from "@/store/analysisStore";
 import { Clock, ListTodo, PieChart } from "lucide-react";
 
 export function StatsCards() {
-  const { totalHours, totalEntries, categoryStats } = useAnalysisStore();
+  const { totalHours, totalEntries, dimensionStats } = useAnalysisStore();
 
   const mainStats = [
     {
@@ -22,8 +22,9 @@ export function StatsCards() {
       bg: "bg-green-50"
     },
     {
-      title: "分类数",
-      value: categoryStats.length,
+      title: "当前维度分布",
+      value: dimensionStats.length, // Number of active options in current view
+      suffix: "项",
       icon: PieChart,
       color: "text-purple-600",
       bg: "bg-purple-50"
@@ -43,11 +44,13 @@ export function StatsCards() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stat.value}</div>
+            <div className="flex items-baseline gap-1">
+                <div className="text-2xl font-bold">{stat.value}</div>
+                {stat.suffix && <span className="text-sm text-slate-500">{stat.suffix}</span>}
+            </div>
           </CardContent>
         </Card>
       ))}
     </div>
   );
 }
-

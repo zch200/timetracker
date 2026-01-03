@@ -1,17 +1,17 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
 import type {
-  CategoryStats,
   TrendDataPoint,
   ActivityRanking,
-  GetCategoryStatsParams,
   GetTrendDataParams,
   GetTotalHoursParams,
   GetActivityRankingParams,
+  DimensionStats,
+  GetDimensionStatsParams,
 } from '../types/api-types'
 
 interface AnalysisState {
-  categoryStats: CategoryStats[]
+  dimensionStats: DimensionStats[]
   trendData: TrendDataPoint[]
   totalHours: number
   totalEntries: number
@@ -19,15 +19,19 @@ interface AnalysisState {
   isLoading: boolean
   error: string | null
   dateRange: { startDate: string; endDate: string }
+  selectedDimensionId: number | null
+  
   setDateRange: (startDate: string, endDate: string) => void
-  fetchCategoryStats: (params: GetCategoryStatsParams) => Promise<void>
+  setSelectedDimensionId: (id: number) => void
+  
+  fetchDimensionStats: (params: GetDimensionStatsParams) => Promise<void>
   fetchTrendData: (params: GetTrendDataParams) => Promise<void>
   fetchTotalHours: (params: GetTotalHoursParams) => Promise<void>
   fetchActivityRanking: (params: GetActivityRankingParams) => Promise<void>
 }
 
 export const useAnalysisStore = create<AnalysisState>((set) => ({
-  categoryStats: [],
+  dimensionStats: [],
   trendData: [],
   totalHours: 0,
   totalEntries: 0,
@@ -40,22 +44,27 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
       .split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
   },
+  selectedDimensionId: null,
 
   setDateRange: (startDate: string, endDate: string) => {
     set({ dateRange: { startDate, endDate } })
   },
+  
+  setSelectedDimensionId: (id: number) => {
+    set({ selectedDimensionId: id })
+  },
 
-  fetchCategoryStats: async (params: GetCategoryStatsParams) => {
+  fetchDimensionStats: async (params: GetDimensionStatsParams) => {
     set({ isLoading: true, error: null })
     try {
-      const result = await api.getCategoryStats(params)
+      const result = await api.getDimensionStats(params)
       if ('error' in result) {
         set({ error: result.error, isLoading: false })
       } else {
-        set({ categoryStats: result, isLoading: false })
+        set({ dimensionStats: result, isLoading: false })
       }
     } catch (error: any) {
-      set({ error: error.message || '获取分类统计失败', isLoading: false })
+      set({ error: error.message || '获取维度统计失败', isLoading: false })
     }
   },
 
@@ -105,4 +114,3 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
     }
   },
 }))
-
